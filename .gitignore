@@ -1,0 +1,11 @@
+node_modules/
+*.tgz
+.DS_Store
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.pi/
+*.jsonl
+tsconfig.paths.json

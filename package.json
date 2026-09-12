@@ -1,0 +1,71 @@
+{
+  "name": "pi-forkme",
+  "version": "0.1.0",
+  "description": "Fork the active Pi session into a new Herdr tab or macOS terminal window with /forkme.",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "jasonz3g",
+    "url": "https://github.com/jasonz3g"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "coding-agent",
+    "session",
+    "fork",
+    "herdr",
+    "ghostty",
+    "iterm2"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "index.ts",
+    "command.ts",
+    "launch.ts",
+    "snapshot.ts",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@types/node": "24.13.4",
+    "typescript": "7.0.2"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:herdr": "node tests/herdr-smoke.mjs",
+    "check": "tsc --noEmit",
+    "verify": "npm run check && npm test",
+    "prepublishOnly": "npm run verify && node scripts/check-release.mjs"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jasonz3g/pi-forkme.git"
+  },
+  "homepage": "https://github.com/jasonz3g/pi-forkme#readme",
+  "bugs": {
+    "url": "https://github.com/jasonz3g/pi-forkme/issues"
+  }
+}
