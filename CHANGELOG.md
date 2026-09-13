@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
 - Keep fork session/tab names stable when forking a fork: replace inherited trailing fork suffixes with the new fork ID instead of accumulating them.
 
