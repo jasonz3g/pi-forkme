@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { createSnapshot } from "../snapshot.ts";
@@ -99,6 +99,40 @@ test("snapshot uses active leaf, preserves labels and leaves source file/state u
 	assert.equal(readFileSync(sourcePath, "utf8"), before);
 });
 
+for (const [label, sourceName, baseName] of [
+	["unnamed", undefined, undefined],
+	["named", "原始会话", "原始会话"],
+	["long name", "Long session ".repeat(10), "Long session ".repeat(10).slice(0, 80)],
+	["legacy nested suffixes", "Original · fork 1234abcd · fork deadbeef", "Original"],
+	["ordinary fork text", "Discuss · fork abcdef12 implementation · fork notes", "Discuss · fork abcdef12 implementation · fork notes"],
+]) {
+	test(`repeated forks keep a stable base name: ${label}`, (t) => {
+		const { ctx, manager } = fixture(t);
+		if (sourceName) manager.appendSessionInfo(sourceName);
+		for (let generation = 0; generation < 6; generation++) {
+			const source = ctx.sessionManager;
+			const nameBefore = source.getSessionName();
+			const snapshot = createSnapshot(ctx, SessionManager);
+			const fork = SessionManager.open(snapshot.path);
+			assert.equal(snapshot.name, `${baseName ?? basename(ctx.cwd)} · fork ${snapshot.id.slice(-8)}`);
+			assert.equal(fork.getSessionName(), snapshot.name);
+			assert.equal(source.getSessionName(), nameBefore);
+			assert.notEqual(snapshot.id, source.getSessionId());
+			assert.equal(fork.getHeader().parentSession, source.getSessionFile());
+			ctx.sessionManager = fork;
+		}
+	});
+}
+
+test("forking a renamed fork uses the new session name", (t) => {
+	const { ctx } = fixture(t);
+	const first = createSnapshot(ctx, SessionManager);
+	ctx.sessionManager = SessionManager.open(first.path);
+	ctx.sessionManager.appendSessionInfo("Renamed session");
+	const second = createSnapshot(ctx, SessionManager);
+	assert.equal(second.name, `Renamed session · fork ${second.id.slice(-8)}`);
+});
+
 test("empty/user-only sessions are persisted and resume without duplicate headers", (t) => {
 	const { ctx, manager } = fixture(t);
 	let snapshot = createSnapshot(ctx, SessionManager);
@@ -148,6 +182,7 @@ test("Herdr resolves the live caller and only starts the created pane", async (t
 	assert.deepEqual(calls[0].args, ["pane", "current", "--current"]);
 	assert.ok(calls[1].args.includes("live-workspace"));
 	assert.ok(calls[1].args.includes("--no-focus"));
+	assert.equal(calls[1].args[calls[1].args.indexOf("--label") + 1], snapshot.name);
 	assert.ok(!calls[1].args.includes("stale-workspace"));
 	assert.ok(calls[2].args.includes("created-pane"));
 	assert.ok(calls[2].args.includes(snapshot.path));

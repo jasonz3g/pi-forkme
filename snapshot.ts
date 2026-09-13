@@ -28,7 +28,9 @@ export function createSnapshot(ctx: SnapshotContext, Manager: typeof SessionMana
 	if (ctx.model) copy.appendModelChange(ctx.model.provider, ctx.model.id);
 	if (ctx.thinkingLevel !== undefined) copy.appendThinkingLevelChange(ctx.thinkingLevel);
 	const id = copy.getSessionId();
-	const name = `${(source.getSessionName() || basename(ctx.cwd) || "Pi").slice(0, 80)} · fork ${id.slice(-8)}`;
+	// Remove inherited fork suffixes before truncating, including older nested names.
+	const baseName = source.getSessionName()?.replace(/(?: · fork [0-9a-f]{8})+$/, "") || basename(ctx.cwd) || "Pi";
+	const name = `${baseName.slice(0, 80)} · fork ${id.slice(-8)}`;
 	copy.appendSessionInfo(name);
 	copy.appendCustomEntry("forkme", {
 		sourceSessionId: source.getSessionId(),

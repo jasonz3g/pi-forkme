@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Keep fork session/tab names stable when forking a fork: replace inherited trailing fork suffixes with the new fork ID instead of accumulating them.
+
 ## 0.1.0
 
 Initial public-package preparation, based on the working local `/forkme` extension.
