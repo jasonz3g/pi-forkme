@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { detectHost, launchFork, prepareLauncher, resumeCommand, type Run } from "./launch.ts";
-import { createSnapshot, type ForkSnapshot } from "./snapshot.ts";
+import { createSnapshot, normalizeForkName, type ForkSnapshot } from "./snapshot.ts";
 
 export interface Dependencies {
 	run: Run;
@@ -14,10 +14,6 @@ export interface Dependencies {
 export function makeHandler(deps: Dependencies) {
 	let launching = false;
 	return async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
-		if (args.trim()) {
-			ctx.ui.notify("Usage: /forkme (no arguments).", "warning");
-			return;
-		}
 		if (ctx.mode !== "tui") {
 			ctx.ui.notify("/forkme requires interactive mode.", "error");
 			return;
@@ -35,6 +31,7 @@ export function makeHandler(deps: Dependencies) {
 		launching = true;
 		let snapshot: ForkSnapshot | undefined;
 		try {
+			const name = normalizeForkName(args);
 			const sourceId = ctx.sessionManager.getSessionId();
 			const sourceLeaf = ctx.sessionManager.getLeafId();
 			const host = detectHost(deps.env, deps.platform);
@@ -49,7 +46,7 @@ export function makeHandler(deps: Dependencies) {
 				return;
 			}
 			// No await between reading the live manager and persisting the snapshot.
-			snapshot = createSnapshot(ctx, deps.Manager);
+			snapshot = createSnapshot(ctx, deps.Manager, name);
 			const destination = await launchFork(launcher, snapshot, ctx.cwd, deps.run, deps.env, deps.invocation);
 			if (deps.isActive && !deps.isActive()) return;
 			ctx.ui.setWidget("forkme-recovery", undefined);

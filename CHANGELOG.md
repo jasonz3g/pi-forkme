@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 - 2026-09-14
+
+- Support `/forkme [name]` to persist an optional custom fork session name and use it for the Herdr tab label, while preserving automatic naming when no name is provided.
+- Normalize custom names and reject remaining ASCII control characters before creating a fork.
+
 ## 0.1.1
 
 - Keep fork session/tab names stable when forking a fork: replace inherited trailing fork suffixes with the new fork ID instead of accumulating them.

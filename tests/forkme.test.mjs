@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
-import { createSnapshot } from "../snapshot.ts";
+import { createSnapshot, normalizeForkName } from "../snapshot.ts";
 import { makeHandler } from "../command.ts";
 import { appleScripts, detectHost, launchEnvironment, launchFork, piInvocation, prepareLauncher, resumeCommand, shellQuote } from "../launch.ts";
 
@@ -124,6 +124,74 @@ for (const [label, sourceName, baseName] of [
 	});
 }
 
+const customNames = [
+	["multiword", "fork name", "fork name"],
+	["Unicode and trimming", "  修复登录问题 🚀  ", "修复登录问题 🚀"],
+	["internal spaces", "fork  name", "fork  name"],
+	["literal shell syntax", `"fork's $HOME; $(touch SHOULD_NOT_EXIST)"`, `"fork's $HOME; $(touch SHOULD_NOT_EXIST)"`],
+	["multiline", "  fork\r\n\nname\n", "fork name"],
+	["explicit fork suffix", "Custom · fork deadbeef · fork 1234abcd", "Custom · fork deadbeef · fork 1234abcd"],
+	["long name", "长名称🚀".repeat(50), "长名称🚀".repeat(50)],
+];
+
+for (const [label, input, expected] of customNames) {
+	test(`custom snapshot name is literal, persistent and leaves source unchanged: ${label}`, (t) => {
+		const { ctx, manager } = fixture(t);
+		manager.appendMessage(user("original"));
+		manager.appendMessage(assistant("original reply"));
+		manager.appendSessionInfo("Original · fork 1234abcd");
+		const originalPath = manager.getSessionFile();
+		const before = readFileSync(originalPath, "utf8");
+		const entriesBefore = structuredClone(manager.getEntries());
+		const leafBefore = manager.getLeafId();
+		const idBefore = manager.getSessionId();
+
+		assert.equal(normalizeForkName(input), expected);
+		assert.equal(normalizeForkName(expected), expected);
+		const snapshot = createSnapshot(ctx, SessionManager, input);
+		assert.equal(snapshot.name, expected);
+		assert.equal(SessionManager.open(snapshot.path).getSessionName(), expected);
+		assert.equal(manager.getSessionName(), "Original · fork 1234abcd");
+		assert.equal(manager.getSessionId(), idBefore);
+		assert.equal(manager.getLeafId(), leafBefore);
+		assert.deepEqual(manager.getEntries(), entriesBefore);
+		assert.equal(readFileSync(originalPath, "utf8"), before);
+	});
+}
+
+test("empty names fall back to automatic naming", (t) => {
+	const { ctx, manager } = fixture(t);
+	manager.appendSessionInfo("Original · fork deadbeef");
+	for (const input of [undefined, "", "   ", " \t\r\n "]) {
+		assert.equal(normalizeForkName(input), undefined);
+		const snapshot = createSnapshot(ctx, SessionManager, input);
+		assert.equal(snapshot.name, `Original · fork ${snapshot.id.slice(-8)}`);
+		assert.equal(SessionManager.open(snapshot.path).getSessionName(), snapshot.name);
+	}
+});
+
+test("duplicate custom names still create independent session IDs and files", (t) => {
+	const { ctx } = fixture(t);
+	const first = createSnapshot(ctx, SessionManager, "same name");
+	const second = createSnapshot(ctx, SessionManager, "same name");
+	assert.notEqual(first.id, second.id);
+	assert.notEqual(first.path, second.path);
+	for (const snapshot of [first, second]) {
+		const fork = SessionManager.open(snapshot.path);
+		assert.equal(fork.getSessionId(), snapshot.id);
+		assert.equal(fork.getSessionName(), "same name");
+	}
+});
+
+test("invalid names are rejected before accessing or persisting a snapshot", () => {
+	for (let code = 0; code <= 0x7f; code++) {
+		if ((code > 0x1f && code !== 0x7f) || code === 0x0a || code === 0x0d) continue;
+		const input = `fork${String.fromCharCode(code)}name`;
+		assert.throws(() => normalizeForkName(input), /Session name must not contain control characters/);
+		assert.throws(() => createSnapshot({}, SessionManager, input), /Session name must not contain control characters/);
+	}
+});
+
 test("forking a renamed fork uses the new session name", (t) => {
 	const { ctx } = fixture(t);
 	const first = createSnapshot(ctx, SessionManager);
@@ -234,43 +302,71 @@ test("launch environment never copies session identity, terminal identity, or cr
 	assert.deepEqual(piInvocation(["node", join(packageDir, "dist/cli.js")], process.execPath), [realpathSync(process.execPath), realpathSync(join(packageDir, "dist/cli.js"))]);
 });
 
-test("command rejects arguments, busy/queued/noninteractive calls without writing or launching", async (t) => {
+test("command rejects busy/queued/noninteractive calls without writing or launching", async (t) => {
 	const f = fixture(t);
 	const calls = [];
 	const handler = makeHandler(dependencies(fakeHerdrRun(calls)));
-	await handler("some-id", f.ctx);
 	await handler("", { ...f.ctx, isIdle: () => false });
 	await handler("", { ...f.ctx, hasPendingMessages: () => true });
 	await handler("", { ...f.ctx, mode: "rpc" });
 	assert.equal(calls.length, 0);
 	assert.equal(readdirSync(f.sessions).length, 0);
 	assert.deepEqual(f.notifications, [
-		{ message: "Usage: /forkme (no arguments).", level: "warning" },
 		{ message: "Agent busy. Try again when idle.", level: "warning" },
 		{ message: "Agent busy. Try again when idle.", level: "warning" },
 		{ message: "/forkme requires interactive mode.", level: "error" },
 	]);
 });
 
-test("command success creates exactly one fork without changing the current session", async (t) => {
+test("invalid command names fail before confirmation or launcher preflight and release the lock", async (t) => {
 	const f = fixture(t);
-	f.manager.appendMessage(user("original"));
-	f.manager.appendMessage(assistant("original reply"));
-	const originalPath = f.manager.getSessionFile();
-	const before = readFileSync(originalPath, "utf8");
 	const calls = [];
-	await makeHandler(dependencies(fakeHerdrRun(calls)))("", f.ctx);
-	assert.equal(readdirSync(f.sessions).length, 2);
-	assert.equal(f.manager.getSessionFile(), originalPath);
-	assert.equal(readFileSync(originalPath, "utf8"), before);
+	let confirmations = 0;
+	f.ctx.ui.confirm = async () => { confirmations++; return false; };
+	const handler = makeHandler(dependencies(fakeHerdrRun(calls)));
+	for (const manager of [f.manager, SessionManager.inMemory(f.cwd)]) {
+		for (const name of ["bad\0name", "bad\x1bname", "bad\tname", "bad\x7fname"]) {
+			await handler(name, { ...f.ctx, sessionManager: manager });
+			assert.deepEqual(f.notifications.at(-1), {
+				message: "/forkme: Session name must not contain control characters.", level: "error",
+			});
+		}
+	}
+	assert.equal(confirmations, 0);
+	assert.equal(calls.length, 0);
+	assert.equal(readdirSync(f.sessions).length, 0);
+	assert.equal(f.widgets.length, 0);
+	await handler("valid name", f.ctx);
 	assert.equal(f.notifications.at(-1).level, "info");
-	assert.equal(f.notifications.at(-1).message, "Fork opened in Herdr tab created-tab.");
 });
+
+for (const [label, input, expected] of [["default", "", undefined], ["blank", "   ", undefined], ...customNames]) {
+	test(`command creates exactly one named fork without changing the current session: ${label}`, async (t) => {
+		const f = fixture(t);
+		f.manager.appendMessage(user("original"));
+		f.manager.appendMessage(assistant("original reply"));
+		const originalPath = f.manager.getSessionFile();
+		const before = readFileSync(originalPath, "utf8");
+		const calls = [];
+		await makeHandler(dependencies(fakeHerdrRun(calls)))(input, f.ctx);
+		const createArgs = calls.find((call) => call.args[0] === "tab" && call.args[1] === "create").args;
+		const startArgs = calls.find((call) => call.args[0] === "agent").args;
+		const fork = SessionManager.open(startArgs[startArgs.indexOf("--session") + 1]);
+		const name = expected ?? `${basename(f.cwd)} · fork ${fork.getSessionId().slice(-8)}`;
+		assert.equal(fork.getSessionName(), name);
+		assert.equal(createArgs[createArgs.indexOf("--label") + 1], name);
+		assert.equal(readdirSync(f.sessions).length, 2);
+		assert.equal(f.manager.getSessionFile(), originalPath);
+		assert.equal(readFileSync(originalPath, "utf8"), before);
+		assert.equal(f.notifications.at(-1).level, "info");
+		assert.equal(f.notifications.at(-1).message, "Fork opened in Herdr tab created-tab.");
+	});
+}
 
 test("failed launch preserves snapshot/tab and provides recovery without retrying", async (t) => {
 	const f = fixture(t);
 	const calls = [];
-	await makeHandler(dependencies(fakeHerdrRun(calls, true)))("", f.ctx);
+	await makeHandler(dependencies(fakeHerdrRun(calls, true)))("recovered fork", f.ctx);
 	assert.equal(readdirSync(f.sessions).length, 1);
 	assert.equal(calls.filter((c) => c.args[0] === "agent").length, 1);
 	assert.ok(!calls.some((c) => c.args.includes("close")));
@@ -279,6 +375,8 @@ test("failed launch preserves snapshot/tab and provides recovery without retryin
 	assert.equal(f.widgets.at(-1).lines[0], "Fork saved. Do not open it twice.");
 	assert.equal(f.widgets.at(-1).lines[2], "Check the new tab/window. If not running, use:");
 	assert.ok(f.widgets.at(-1).lines.some((line) => line.includes("--session")));
+	const snapshotPath = f.widgets.at(-1).lines[1].slice("Session: ".length);
+	assert.equal(SessionManager.open(snapshotPath).getSessionName(), "recovered fork");
 });
 
 test("unsupported environment fails without creating a snapshot", async (t) => {
@@ -325,7 +423,7 @@ test("extension loads through Pi's actual extension loader and registers /forkme
 	const loaded = await loadExtensions([join(extensionDir, "index.ts")], extensionDir);
 	assert.deepEqual(loaded.errors, []);
 	assert.equal(loaded.extensions.length, 1);
-	assert.equal(loaded.extensions[0].commands.get("forkme").description, "Fork this session into a new tab or window");
+	assert.equal(loaded.extensions[0].commands.get("forkme").description, "Fork this session into a new tab or window (usage: /forkme [name])");
 });
 
 const nativeApps = {

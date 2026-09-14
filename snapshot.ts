@@ -10,8 +10,19 @@ export interface ForkSnapshot {
 
 type SnapshotContext = Pick<ExtensionCommandContext, "cwd" | "sessionManager" | "model" | "thinkingLevel">;
 
+/** Match Pi's session-name normalization, then reject remaining ASCII controls. */
+export function normalizeForkName(value?: string): string | undefined {
+	const name = value?.replace(/[\r\n]+/g, " ").trim();
+	if (!name) return undefined;
+	if (/[\x00-\x1f\x7f]/.test(name)) {
+		throw new Error("Session name must not contain control characters.");
+	}
+	return name;
+}
+
 /** Snapshot the live active branch, without ever mutating the original manager or file. */
-export function createSnapshot(ctx: SnapshotContext, Manager: typeof SessionManager): ForkSnapshot {
+export function createSnapshot(ctx: SnapshotContext, Manager: typeof SessionManager, requestedName?: string): ForkSnapshot {
+	const customName = normalizeForkName(requestedName);
 	const source = ctx.sessionManager;
 	const sourceHeader = source.getHeader();
 	if (!sourceHeader) throw new Error("Missing session header. Cannot fork.");
@@ -30,7 +41,7 @@ export function createSnapshot(ctx: SnapshotContext, Manager: typeof SessionMana
 	const id = copy.getSessionId();
 	// Remove inherited fork suffixes before truncating, including older nested names.
 	const baseName = source.getSessionName()?.replace(/(?: · fork [0-9a-f]{8})+$/, "") || basename(ctx.cwd) || "Pi";
-	const name = `${baseName.slice(0, 80)} · fork ${id.slice(-8)}`;
+	const name = customName ?? `${baseName.slice(0, 80)} · fork ${id.slice(-8)}`;
 	copy.appendSessionInfo(name);
 	copy.appendCustomEntry("forkme", {
 		sourceSessionId: source.getSessionId(),

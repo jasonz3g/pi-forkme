@@ -42,7 +42,20 @@ In an already-running Pi session, reload extensions and run the command:
 /forkme
 ```
 
-New Pi sessions load the extension automatically. Run `/forkme` while the agent is idle; no arguments are needed.
+New Pi sessions load the extension automatically. Run `/forkme` while the agent is idle. Optionally provide a name for the new session:
+
+```text
+/forkme fork name
+```
+
+This creates a session named `fork name`, without an added fork suffix. The original session stays unchanged. In Herdr, the new tab label uses the same name; native terminal window titles are not explicitly controlled.
+
+- `/forkme` or a whitespace-only argument keeps automatic naming: the source session name (or working-directory name) plus ` · fork <id>`.
+- The entire argument is the name. Leading/trailing whitespace is trimmed, internal spaces are preserved, and line breaks become spaces.
+- No quotes are needed; quotes and shell syntax are treated literally. Chinese, emoji, and duplicate names are supported. Custom names are not truncated or stripped of existing fork suffixes.
+- Remaining ASCII control characters (including internal tabs, NUL, and ESC) are rejected before creating a fork.
+
+The name is saved in the fork file and retained when reopening it, including after a failed terminal launch.
 
 ## Requirements
 

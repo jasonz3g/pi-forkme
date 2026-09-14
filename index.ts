@@ -16,7 +16,7 @@ export default function forkme(pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("forkme", {
-		description: "Fork this session into a new tab or window",
+		description: "Fork this session into a new tab or window (usage: /forkme [name])",
 		handler: makeHandler({
 			run, env: process.env, platform: process.platform,
 			Manager: SessionManager, invocation: piInvocation(), isActive: () => active,
