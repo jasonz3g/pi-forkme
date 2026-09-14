@@ -140,7 +140,9 @@ export async function launchFork(
 	// Check again immediately before any mutating Herdr command.
 	if (env.HERDR_ENV !== "1") throw new Error("Not running in Herdr.");
 	const { binary, workspaceId } = launcher;
-	const args = ["tab", "create", "--workspace", workspaceId, "--cwd", cwd, "--label", snapshot.name, "--no-focus"];
+	// Focus at creation, not after agent readiness: a delayed focus would override
+	// any tab the user manually selected while the new Pi was starting.
+	const args = ["tab", "create", "--workspace", workspaceId, "--cwd", cwd, "--label", snapshot.name, focus ? "--focus" : "--no-focus"];
 	for (const value of launchEnvironment(env)) args.push("--env", value);
 	const created = parseHerdr(await run(binary, args));
 	const tabId = created.tab?.tab_id;
@@ -151,7 +153,6 @@ export async function launchFork(
 			"agent", "start", `fork-${snapshot.id.slice(-12)}`, "--kind", "pi", "--pane", paneId,
 			"--timeout", "30000", "--", ...resumeArgs(snapshot),
 		], 40_000);
-		if (focus) await run(binary, ["tab", "focus", tabId]);
 	} catch (error) {
 		// A timeout/permission prompt doesn't prove launch failed. Never auto-retry,
 		// close the tab, or remove the snapshot: that could kill a live fork.

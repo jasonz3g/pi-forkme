@@ -249,13 +249,58 @@ test("Herdr resolves the live caller and only starts the created pane", async (t
 	await launchFork(launcher, snapshot, ctx.cwd, run, herdrEnv, ["pi"]);
 	assert.deepEqual(calls[0].args, ["pane", "current", "--current"]);
 	assert.ok(calls[1].args.includes("live-workspace"));
-	assert.ok(calls[1].args.includes("--no-focus"));
+	assert.ok(calls[1].args.includes("--focus"));
+	assert.ok(!calls[1].args.includes("--no-focus"));
 	assert.equal(calls[1].args[calls[1].args.indexOf("--label") + 1], snapshot.name);
 	assert.ok(!calls[1].args.includes("stale-workspace"));
 	assert.ok(calls[2].args.includes("created-pane"));
 	assert.ok(calls[2].args.includes(snapshot.path));
-	assert.deepEqual(calls[3].args, ["tab", "focus", "created-tab"]);
+	assert.equal(calls.length, 3);
 });
+
+for (const focus of [true, false]) {
+	for (const failStart of [false, true]) {
+		test(`Herdr focuses only at creation, never after delayed startup: focus=${focus}, fail=${failStart}`, async (t) => {
+			const { ctx } = fixture(t);
+			const snapshot = createSnapshot(ctx, SessionManager);
+			const calls = [];
+			const fakeRun = fakeHerdrRun(calls, failStart);
+			let focusedTab = "original-tab";
+			let release, markStarted;
+			const pending = new Promise((resolve) => { release = resolve; });
+			const started = new Promise((resolve) => { markStarted = resolve; });
+			const run = async (binary, args) => {
+				if (args[0] === "tab" && args[1] === "create") {
+					assert.ok(args.includes(focus ? "--focus" : "--no-focus"));
+					assert.ok(!args.includes(focus ? "--no-focus" : "--focus"));
+					if (args.includes("--focus")) focusedTab = "created-tab";
+				}
+				if (args[0] === "tab" && args[1] === "focus") focusedTab = args[2];
+				if (args[0] === "agent") {
+					markStarted();
+					await pending;
+				}
+				return fakeRun(binary, args);
+			};
+			const launcher = await prepareLauncher("herdr", run, herdrEnv);
+			const launch = launchFork(launcher, snapshot, ctx.cwd, run, herdrEnv, ["pi"], focus);
+			const result = failStart ? assert.rejects(launch, /startup timed out/) : launch;
+			await started;
+			try {
+				assert.equal(focusedTab, focus ? "created-tab" : "original-tab");
+				// The user switches tabs while agent start is still waiting for readiness.
+				focusedTab = "manually-selected-tab";
+			} finally {
+				release();
+			}
+			await result;
+			assert.equal(focusedTab, "manually-selected-tab");
+			assert.deepEqual(calls.map(({ args }) => args.slice(0, 2)), [
+				["pane", "current"], ["tab", "create"], ["agent", "start"],
+			]);
+		});
+	}
+}
 
 test("all native adapters request new windows, never inject into the existing window", async (t) => {
 	const { ctx } = fixture(t);

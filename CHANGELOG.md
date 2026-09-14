@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2026-09-14
+
+- Focus new Herdr tabs at creation instead of after Pi startup, preventing delayed focus changes from overriding the user's manually selected tab.
+
 ## 0.2.0 - 2026-09-14
 
 - Support `/forkme [name]` to persist an optional custom fork session name and use it for the Herdr tab label, while preserving automatic naming when no name is provided.

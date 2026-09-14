@@ -1,6 +1,6 @@
 {
   "name": "pi-forkme",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Fork the active Pi session into a new Herdr tab or macOS terminal window with /forkme.",
   "type": "module",
   "license": "MIT",

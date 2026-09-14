@@ -21,6 +21,8 @@ No session ID required. Forking does not make a model request.
 
 The original session stays open and unchanged. The new Pi uses an independent session file and the same working directory.
 
+In Herdr, the new tab receives focus as soon as it is created, without waiting for Pi to become ready. Startup completion never refocuses it, so you can switch to another tab while it loads.
+
 ## Install
 
 ```bash
