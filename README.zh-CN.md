@@ -1,8 +1,10 @@
 # pi-forkme
 
-**在 Pi 内输入 `/forkme`，将当前会话分叉到新终端，原会话保持不变。**
+**在 Pi 内输入 `/forkme [name]`，将当前会话分叉到新终端，原会话保持不变。**
 
 [English](README.md) · [MIT 协议](LICENSE)
+
+`[name]` 为可选参数；指定名称时无需输入方括号，省略时自动命名。
 
 无需指定 session ID，创建分叉不会调用模型。
 
@@ -39,10 +41,10 @@ pi install https://github.com/jasonz3g/pi-forkme
 新启动的 Pi 会话会自动加载扩展。在 Agent 空闲时输入 `/forkme` 即可，也可以指定新会话名称：
 
 ```text
-/forkme fork name
+/forkme 问题 A
 ```
 
-新会话名称为 `fork name`，不追加 fork 后缀，原会话保持不变。Herdr 新标签页使用相同名称；原生终端窗口标题不做专门控制。
+新会话名称为 `问题 A`，不追加 fork 后缀，原会话保持不变。Herdr 新标签页使用相同名称；原生终端窗口标题不做专门控制。
 
 - `/forkme` 或仅包含空白的参数沿用自动命名：原会话名称（或工作目录名）加上 ` · fork <id>`。
 - 命令后面的整段文本作为名称，去除首尾空白，保留中间空格，换行转换为空格。

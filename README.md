@@ -7,8 +7,10 @@
 Run one command inside [Pi](https://pi.dev):
 
 ```text
-/forkme
+/forkme [name]
 ```
+
+`[name]` is optional; replace it with your desired session name without the brackets, or omit it for automatic naming.
 
 No session ID required. Forking does not make a model request.
 
@@ -47,10 +49,10 @@ In an already-running Pi session, reload extensions and run the command:
 New Pi sessions load the extension automatically. Run `/forkme` while the agent is idle. Optionally provide a name for the new session:
 
 ```text
-/forkme fork name
+/forkme Issue A
 ```
 
-This creates a session named `fork name`, without an added fork suffix. The original session stays unchanged. In Herdr, the new tab label uses the same name; native terminal window titles are not explicitly controlled.
+This creates a session named `Issue A`, without an added fork suffix. The original session stays unchanged. In Herdr, the new tab label uses the same name; native terminal window titles are not explicitly controlled.
 
 - `/forkme` or a whitespace-only argument keeps automatic naming: the source session name (or working-directory name) plus ` · fork <id>`.
 - The entire argument is the name. Leading/trailing whitespace is trimmed, internal spaces are preserved, and line breaks become spaces.

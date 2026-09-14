@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 export interface ForkSnapshot {
 	path: string;
@@ -49,7 +49,9 @@ export function createSnapshot(ctx: SnapshotContext, Manager: typeof SessionMana
 	});
 
 	const header = { ...copy.getHeader()!, cwd: ctx.cwd, parentSession: source.getSessionFile() };
-	const dir = source.getSessionDir() || Manager.create(ctx.cwd).getSessionDir();
+	// Relative session directories are based on process.cwd(), not the session's cwd.
+	// Pin the absolute path before the launcher changes directories to ctx.cwd.
+	const dir = resolve(source.getSessionDir() || Manager.create(ctx.cwd).getSessionDir());
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const path = join(dir, `${header.timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`);
 	const data = [header, ...copy.getEntries()].map((entry) => JSON.stringify(entry)).join("\n") + "\n";

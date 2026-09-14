@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2 - 2026-09-14
+
+- Pin native launches to the active Pi installation across CLI layouts and resolve fork session paths before launch.
+- Clarify custom session-name examples in the English and Chinese README files.
+
 ## 0.2.1 - 2026-09-14
 
 - Focus new Herdr tabs at creation instead of after Pi startup, preventing delayed focus changes from overriding the user's manually selected tab.

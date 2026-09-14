@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { createSnapshot, normalizeForkName } from "../snapshot.ts";
@@ -98,6 +98,63 @@ test("snapshot uses active leaf, preserves labels and leaves source file/state u
 	fork.appendMessage(user("fork-only"));
 	assert.equal(readFileSync(sourcePath, "utf8"), before);
 });
+
+for (const sessionDirKind of ["relative", "current directory", "absolute"]) {
+	test(`snapshot resumes from a different cwd: ${sessionDirKind} session directory`, (t) => {
+		const f = fixture(t);
+		const sessionDir = sessionDirKind === "relative" ? "./sessions" : sessionDirKind === "current directory" ? "." : f.sessions;
+		const messages = [user("Issue A context"), assistant("Completed answer")];
+		const sdkUrl = pathToFileURL(join(packageDir, "dist/index.js")).href;
+		const snapshotUrl = pathToFileURL(join(extensionDir, "snapshot.ts")).href;
+		// Isolate the startup cwd in a child, rather than changing the test runner's cwd.
+		// Pi can resume another project's session without changing process.cwd().
+		const createScript = `
+			import assert from "node:assert/strict";
+			import { readFileSync } from "node:fs";
+			import { resolve } from "node:path";
+			import { SessionManager } from ${JSON.stringify(sdkUrl)};
+			import { createSnapshot } from ${JSON.stringify(snapshotUrl)};
+			const [cwd, sessionDir] = process.argv.slice(1);
+			const manager = SessionManager.create(cwd, sessionDir);
+			for (const message of ${JSON.stringify(messages)}) manager.appendMessage(message);
+			const sourceFile = resolve(manager.getSessionFile());
+			const before = readFileSync(sourceFile, "utf8");
+			const id = manager.getSessionId();
+			const entries = structuredClone(manager.getEntries());
+			const snapshot = createSnapshot({ cwd, sessionManager: manager, thinkingLevel: "high" }, SessionManager, "Issue A");
+			assert.equal(manager.getSessionId(), id);
+			assert.deepEqual(manager.getEntries(), entries);
+			assert.equal(readFileSync(sourceFile, "utf8"), before);
+			console.log(JSON.stringify({ snapshot, sourceFile, before }));
+		`;
+		const { snapshot, sourceFile, before } = JSON.parse(execFileSync(process.execPath, [
+			"--input-type=module", "-e", createScript, "--", f.cwd, sessionDir,
+		], { cwd: f.dir, encoding: "utf8", timeout: 15_000 }));
+
+		// Exercise the real launch/recovery command; the child opens its --session
+		// with Pi's SDK without starting a terminal or making a model request.
+		const openScript = `
+			import { SessionManager } from ${JSON.stringify(sdkUrl)};
+			const [sessionFlag, path, dirFlag, dir] = process.argv.slice(1);
+			if (sessionFlag !== "--session" || dirFlag !== "--session-dir") throw new Error("Unexpected resume arguments");
+			const fork = SessionManager.open(path, dir);
+			console.log(JSON.stringify({ id: fork.getSessionId(), name: fork.getSessionName(), cwd: process.cwd(), path, dir,
+				messages: fork.getEntries().filter(e => e.type === "message").map(e => e.message) }));
+		`;
+		const command = resumeCommand(f.cwd, snapshot, [process.execPath, "--input-type=module", "-e", openScript, "--"], {});
+		const resumed = JSON.parse(execFileSync("/bin/sh", ["-c", command], { cwd: f.dir, encoding: "utf8", timeout: 15_000 }));
+		assert.equal(resumed.id, snapshot.id, "Must resume the saved fork, not create an empty session in the new cwd.");
+		assert.deepEqual(resumed.messages, messages);
+		assert.equal(resumed.name, "Issue A");
+		assert.equal(realpathSync(resumed.cwd), realpathSync(f.cwd));
+		assert.ok(isAbsolute(snapshot.path));
+		assert.equal(resumed.path, snapshot.path);
+		assert.ok(isAbsolute(resumed.dir));
+		assert.equal(resumed.dir, dirname(snapshot.path));
+		assert.equal(realpathSync(resumed.dir), realpathSync(resolve(f.dir, sessionDir)));
+		assert.equal(readFileSync(sourceFile, "utf8"), before);
+	});
+}
 
 for (const [label, sourceName, baseName] of [
 	["unnamed", undefined, undefined],

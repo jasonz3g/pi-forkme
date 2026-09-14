@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { ForkSnapshot } from "./snapshot.ts";
 
@@ -61,9 +61,22 @@ export function shellQuote(value: string): string {
 export function piInvocation(argv = process.argv, execPath = process.execPath): string[] {
 	try {
 		const entry = realpathSync(argv[1]);
-		const manifest = JSON.parse(readFileSync(join(dirname(entry), "..", "package.json"), "utf8"));
-		if (basename(entry) === "cli.js" && manifest.name === "@earendil-works/pi-coding-agent") {
-			return [realpathSync(execPath), entry];
+		if (basename(entry) !== "cli.js") return ["pi"];
+		// Support both dist/cli.js and dist/bundle/cli.js. Stop at the nearest
+		// package boundary so a nested custom launcher is not mistaken for Pi.
+		let dir = dirname(entry);
+		for (let depth = 0; depth < 4; depth++) {
+			const manifestPath = join(dir, "package.json");
+			if (existsSync(manifestPath)) {
+				const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+				if (manifest.name === "@earendil-works/pi-coding-agent") {
+					return [realpathSync(execPath), entry];
+				}
+				break;
+			}
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
 		}
 	} catch { /* SDK/custom launchers: use Pi from the preserved PATH. */ }
 	return ["pi"];
