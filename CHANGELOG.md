@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 - 2026-11-12
+
+- Support the **Herdr app** and its `hc` CLI: `/forkme` now opens the fork as an independent child terminal in the caller's workspace, detected through `HC_TERMINAL_ID`/`HC_TERMINAL_SOCKET`, named `fork-<id>`, started with `hc run --bg --no-notify --keep --outlive-parent`.
+- Stop rejecting Herdr terminals that only expose `SSH_CONNECTION=herdr`: that marker is no longer treated as a plain SSH login.
+- Verified against Pi **1.5.2** (development dependency raised from 0.85.1); the extension API used by `/forkme` is unchanged, so older Pi releases keep working.
+- Add the opt-in `npm run test:hc` live test, which starts a real fork terminal, checks `/session`, and closes only that terminal.
+
 ## 0.2.2 - 2026-09-14
 
 - Pin native launches to the active Pi installation across CLI layouts and resolve fork session paths before launch.

@@ -52,11 +52,30 @@ function fakeHerdrRun(calls, failStart = false) {
 	};
 }
 const herdrEnv = { HERDR_ENV: "1", HERDR_PANE_ID: "caller", HERDR_WORKSPACE_ID: "stale-workspace", TERM_PROGRAM: "ghostty", PATH: process.env.PATH };
+// The Herdr app and its hc CLI mark terminals with HC_* and SSH_CONNECTION=herdr.
+const hcEnv = { HC_TERMINAL_ID: "t22", HC_TERMINAL_SOCKET: "/tmp/hc.sock", SSH_CONNECTION: "herdr", TERM_PROGRAM: "ghostty", PATH: process.env.PATH };
 const dependencies = (run, env = herdrEnv) => ({ run, env, platform: "darwin", Manager: SessionManager, invocation: ["pi"] });
+
+function fakeHcRun(calls, failRun = false) {
+	return async (binary, args) => {
+		calls.push({ binary, args });
+		if (args[0] === "ls") return JSON.stringify({ core: { name: "host" }, terminals: [{ address: "t22" }] });
+		if (args[0] === "run") {
+			if (failRun) throw new Error('hc exited with code 3: {"error":{"kind":"server_not_running","message":"no herdr-core server is running"}}');
+			return JSON.stringify({ address: "t25", name: args[args.indexOf("--name") + 1], parent: "t22", state: "live" });
+		}
+		return JSON.stringify({ error: { message: "unexpected hc command" } });
+	};
+}
 
 test("host routing: Herdr wins; direct terminals use native windows", () => {
 	assert.equal(detectHost(herdrEnv, "darwin"), "herdr");
 	assert.equal(detectHost({ HERDR_ENV: "1" }, "linux"), "herdr");
+	assert.equal(detectHost(hcEnv, "linux"), "hc");
+	assert.equal(detectHost(hcEnv, "darwin"), "hc");
+	assert.equal(detectHost({ HERDR_ENV: "1", HC_TERMINAL_ID: "t22" }, "darwin"), "herdr");
+	// The Herdr sentinel is not a plain SSH login, so a bare app terminal still forks.
+	assert.equal(detectHost({ SSH_CONNECTION: "herdr", TERM_PROGRAM: "ghostty" }, "darwin"), "ghostty");
 	assert.equal(detectHost({ TERM_PROGRAM: "ghostty" }, "darwin"), "ghostty");
 	assert.equal(detectHost({ TERM_PROGRAM: "iTerm.app" }, "darwin"), "iterm2");
 	assert.equal(detectHost({ TERM_PROGRAM: "Apple_Terminal" }, "darwin"), "terminal");
@@ -313,6 +332,89 @@ test("Herdr resolves the live caller and only starts the created pane", async (t
 	assert.ok(calls[2].args.includes("created-pane"));
 	assert.ok(calls[2].args.includes(snapshot.path));
 	assert.equal(calls.length, 3);
+});
+
+test("hc preflight reports Herdr socket errors before writing a snapshot", async () => {
+	const calls = [];
+	const launcher = await prepareLauncher("hc", fakeHcRun(calls), hcEnv);
+	assert.deepEqual(launcher, { host: "hc", binary: "hc" });
+	assert.deepEqual(calls[0], { binary: "hc", args: ["ls", "--json"] });
+	assert.deepEqual(await prepareLauncher("hc", fakeHcRun([]), { ...hcEnv, HC_BIN_PATH: "/opt/homebrew/bin/hc" }), { host: "hc", binary: "/opt/homebrew/bin/hc" });
+	const down = async () => JSON.stringify({ error: { kind: "server_not_running", message: "no herdr-core server is running", hint: "run hc server start" } });
+	await assert.rejects(prepareLauncher("hc", down, hcEnv), /Herdr: no herdr-core server is running \(run hc server start\)/);
+	await assert.rejects(prepareLauncher("hc", async () => "not json", hcEnv), /Invalid Herdr \(hc\) response/);
+});
+
+test("hc starts the fork as an independent child terminal and resumes exactly that session", async (t) => {
+	const f = fixture(t);
+	const snapshot = createSnapshot(f.ctx, SessionManager, "hc fork");
+	const calls = [];
+	const run = fakeHcRun(calls);
+	const launcher = await prepareLauncher("hc", run, hcEnv);
+	// Execute the generated command for real with a stub Pi instead of opening a terminal.
+	const openScript = `
+		import { SessionManager } from ${JSON.stringify(pathToFileURL(join(packageDir, "dist/index.js")).href)};
+		const [sessionFlag, path, dirFlag, dir] = process.argv.slice(1);
+		if (sessionFlag !== "--session" || dirFlag !== "--session-dir") throw new Error("Unexpected resume arguments");
+		const fork = SessionManager.open(path, dir);
+		console.log(JSON.stringify({ id: fork.getSessionId(), name: fork.getSessionName(), cwd: process.cwd(),
+			args: process.argv.slice(1), path, dir, messages: fork.getEntries().filter(e => e.type === "message").length }));
+	`;
+	const openInvocation = [process.execPath, "--input-type=module", "-e", openScript, "--"];
+	assert.equal(await launchFork(launcher, snapshot, f.cwd, run, hcEnv, openInvocation), "Herdr terminal t25");
+	assert.deepEqual(calls.map(({ args }) => args[0]), ["ls", "run"]);
+	const args = calls[1].args;
+	assert.equal(args[0], "run");
+	for (const flag of ["--json", "--bg", "--no-notify", "--keep", "--outlive-parent"]) assert.ok(args.includes(flag));
+	assert.equal(args[args.indexOf("--name") + 1], `fork-${snapshot.id.slice(-12)}`);
+	assert.equal(args[args.indexOf("--cwd") + 1], f.cwd);
+	// hc passes argv literally: the whole launch stays one shell command, never re-quoted.
+	assert.deepEqual(args.slice(args.indexOf("--"), args.indexOf("--") + 3), ["--", "/bin/sh", "-c"]);
+	assert.equal(args.length, args.indexOf("--") + 4);
+
+	const resumed = JSON.parse(execFileSync("/bin/sh", ["-c", args[args.length - 1]], {
+		cwd: f.dir, encoding: "utf8", timeout: 15_000, env: { PATH: process.env.PATH },
+	}));
+	assert.equal(resumed.id, snapshot.id);
+	assert.equal(resumed.name, "hc fork");
+	assert.deepEqual(resumed.args, ["--session", snapshot.path, "--session-dir", dirname(snapshot.path)]);
+	assert.equal(realpathSync(resumed.cwd), realpathSync(f.cwd));
+});
+
+test("hc launch failure keeps the snapshot, names the terminal, and never retries", async (t) => {
+	const f = fixture(t);
+	const calls = [];
+	await makeHandler(dependencies(fakeHcRun(calls, true), hcEnv))("hc fork", f.ctx);
+	assert.equal(readdirSync(f.sessions).length, 1, "The fork is saved once and never deleted.");
+	assert.deepEqual(calls.map(({ args }) => args[0]), ["ls", "run"], "A failed launch is not retried.");
+	assert.match(f.notifications.at(-1).message, /^\/forkme: Check Herdr terminal fork-[0-9a-f]{12} before retrying\. hc exited with code 3/);
+	assert.equal(f.notifications.at(-1).level, "error");
+	assert.equal(f.widgets.at(-1).lines[0], "Fork saved. Do not open it twice.");
+	const snapshotPath = f.widgets.at(-1).lines[1].slice("Session: ".length);
+	assert.equal(SessionManager.open(snapshotPath).getSessionName(), "hc fork");
+	assert.ok(f.widgets.at(-1).lines.some((line) => line.includes("--session")));
+});
+
+test("command forks from a Herdr app terminal without changing the source session", async (t) => {
+	const f = fixture(t);
+	f.manager.appendMessage(user("original"));
+	f.manager.appendMessage(assistant("original reply"));
+	const originalPath = f.manager.getSessionFile();
+	const before = readFileSync(originalPath, "utf8");
+	const calls = [];
+	await makeHandler(dependencies(fakeHcRun(calls), hcEnv))("in app", f.ctx);
+	assert.deepEqual(f.notifications.at(-1), { message: "Fork opened in Herdr terminal t25.", level: "info" });
+	const script = calls.find((call) => call.args[0] === "run").args.at(-1);
+	const forkPath = readdirSync(f.sessions).map((file) => join(f.sessions, file)).find((path) => path !== originalPath);
+	// Every launch token is shell-quoted, so both the flag and the path appear quoted.
+	assert.ok(script.includes(`${shellQuote("--session")} ${shellQuote(forkPath)}`), "The launch command must open the saved fork verbatim.");
+	const fork = SessionManager.open(forkPath);
+	assert.equal(fork.getSessionName(), "in app");
+	assert.deepEqual(messageIds(fork), messageIds(f.manager));
+	assert.equal(fork.getHeader().parentSession, originalPath);
+	assert.equal(readdirSync(f.sessions).length, 2);
+	assert.equal(f.manager.getSessionFile(), originalPath);
+	assert.equal(readFileSync(originalPath, "utf8"), before);
 });
 
 for (const focus of [true, false]) {

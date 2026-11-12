@@ -10,12 +10,15 @@
 
 | 当前环境 | Fork 的打开位置 |
 | --- | --- |
-| Herdr 内，无论外层是什么终端 | 调用方 pane 当前所在 workspace 的新 tab |
+| Herdr App 终端（`hc`），无论外层是什么终端 | 调用方下方新建终端，同一 workspace |
+| 经典 Herdr（`herdr` CLI），无论外层是什么终端 | 调用方 pane 当前所在 workspace 的新 tab |
 | macOS Ghostty，直接运行 Pi | 新 Ghostty 窗口 |
 | macOS iTerm2，直接运行 Pi | 新 iTerm2 窗口 |
 | macOS Terminal，直接运行 Pi | 新 Terminal 窗口 |
 
-Herdr 创建新标签页时立即切换过去，不等待新 Pi 启动就绪。启动完成后不会再次抢焦点，因此你可以在等待期间自由切换到其他标签页。原会话保留，不切换会话文件、不重写。
+在 Herdr App 中，fork 通过 `hc run --bg --no-notify --outlive-parent` 启动：不会向当前 Pi 输入框注入文本，原 Pi 退出后新终端继续运行，也不会抢其他窗口焦点。客户端看过该终端后，Herdr 就会将其识别为 Pi agent。
+
+经典 Herdr 创建新标签页时立即切换过去，不等待新 Pi 启动就绪。启动完成后不会再次抢焦点，因此你可以在等待期间自由切换到其他标签页。原会话保留，不切换会话文件、不重写。
 
 ## 安装
 
@@ -44,7 +47,7 @@ pi install https://github.com/jasonz3g/pi-forkme
 /forkme 问题 A
 ```
 
-新会话名称为 `问题 A`，不追加 fork 后缀，原会话保持不变。Herdr 新标签页使用相同名称；原生终端窗口标题不做专门控制。
+新会话名称为 `问题 A`，不追加 fork 后缀，原会话保持不变。经典 Herdr 新标签页使用相同名称；Herdr App 的终端名只允许小写 ASCII，因此固定为 `fork-<id>`；原生终端窗口标题不做专门控制。
 
 - `/forkme` 或仅包含空白的参数沿用自动命名：原会话名称（或工作目录名）加上 ` · fork <id>`。
 - 命令后面的整段文本作为名称，去除首尾空白，保留中间空格，换行转换为空格。
@@ -55,14 +58,15 @@ pi install https://github.com/jasonz3g/pi-forkme
 
 ## 运行要求
 
-- Pi **0.85.1+**，已在 `0.85.1` 测试。
+- Pi **0.85.1+**，已在 **1.5.2** 和 `0.85.1` 测试。
 - Node 版 Pi 使用 Node.js **22.19.0+**。
-- Herdr 已在 **0.9.0** 测试，需要 `pane current`、`tab create`、`agent start` 接口。
+- Herdr App 已在 **hc 0.1.20** 测试，使用 `hc run`；通过 `HC_TERMINAL_ID`/`HC_TERMINAL_SOCKET` 识别终端。
+- 经典 Herdr 已在 **0.9.0** 测试，需要 `pane current`、`tab create`、`agent start` 接口。
 - 原生窗口仅支持 macOS；Ghostty 需要 **1.3.0+**，并启用 AppleScript（`macos-applescript` 默认开启）。
 
 首次使用可能需要允许 macOS 自动化权限。原生适配器确认终端接受了创建窗口请求，不像 Herdr 那样额外等待新 Pi 输入就绪。
 
-普通 SSH、Herdr 之外的 tmux/screen、未知终端、非 macOS 的原生窗口暂未适配，会明确报错。Herdr 优先识别；远端 Herdr 内也通过远端本机 CLI/socket 打开标签页。
+普通 SSH、Herdr 之外的 tmux/screen、未知终端、非 macOS 的原生窗口暂未适配，会明确报错。Herdr 优先识别；远端 Herdr 内也通过远端本机 CLI/socket 打开标签页。`SSH_CONNECTION=herdr` 会被当作 Herdr 标记，不会被误判为普通 SSH。
 
 ## 分叉语义
 
@@ -84,7 +88,7 @@ pi install https://github.com/jasonz3g/pi-forkme
 
 启动失败/超时时不会自动重试、关闭新 tab 或删除已经生成的 Fork。
 
-1. 先检查新窗口/tab 是否已经打开或正在等待授权。
+1. 先检查新窗口/tab 是否已经打开或正在等待授权。Herdr App 中终端名为 `fork-<id>`：用 `hc get fork-<id>`、`hc read fork-<id>` 查看，用 `hc kill fork-<id>` 结束。
 2. 已保存副本时，原 Pi 会显示会话路径和恢复命令。
 3. 确认没有其他进程使用该副本后，再在新终端执行恢复命令。
 
@@ -101,14 +105,17 @@ npm run verify
 
 开发时可在仓库根目录执行 `pi install .`，让 Pi 加载本地代码。
 
-Herdr 的可选实测：
+两项**可选**实测会在真实环境启动 fork，且不发送模型请求：
 
 ```bash
-# 仅在 Herdr 内、且 PATH 中存在 pi 时执行：
+# 仅在 Herdr App 终端内（存在 HC_TERMINAL_ID）执行：
+npm run test:hc
+
+# 仅在经典 Herdr 内、且 PATH 中存在 pi 时执行：
 npm run test:herdr
 ```
 
-该测试创建一个临时 tab，不抢焦点，启动 Pi 并验证分叉会话后关闭测试 tab，不发送模型请求。
+`test:hc` 创建一个临时子终端，在新终端启动分叉后的 Pi，验证 `/session` 输出的 session ID 完全一致，最后只关闭该终端。`test:herdr` 创建临时 tab，不抢焦点，验证分叉会话后关闭测试 tab。
 
 维护者发布流程见 [docs/RELEASING.md](docs/RELEASING.md)。
 

@@ -2,16 +2,26 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { ForkSnapshot } from "./snapshot.ts";
 
-export type Host = "herdr" | "ghostty" | "iterm2" | "terminal";
+export type Host = "herdr" | "hc" | "ghostty" | "iterm2" | "terminal";
 export type Run = (command: string, args: string[], timeout?: number) => Promise<string>;
 export type Launcher =
 	| { host: "herdr"; binary: string; workspaceId: string }
+	| { host: "hc"; binary: string }
 	| { host: "ghostty" | "iterm2" | "terminal" };
+
+/** Herdr marks its own terminals with SSH_CONNECTION=herdr; that is not a plain SSH login. */
+function isPlainSsh(env: NodeJS.ProcessEnv): boolean {
+	if (/^(?:herdr|hc)$/i.test(env.SSH_CONNECTION || "")) return false;
+	return Boolean(env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT);
+}
 
 export function detectHost(env: NodeJS.ProcessEnv, platform: string): Host {
 	// Prefer the inner host, even when TERM_PROGRAM says Ghostty/iTerm2.
 	if (env.HERDR_ENV === "1") return "herdr";
-	if (env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT) {
+	// The Herdr app and its hc CLI identify terminals with HC_* instead of HERDR_*.
+	// Children started with `hc run` inherit HC_TERMINAL_ID, so this also holds in forks.
+	if (env.HC_TERMINAL_ID || env.HC_TERMINAL_SOCKET) return "hc";
+	if (isPlainSsh(env)) {
 		throw new Error("Plain SSH is unsupported. Use Herdr on the remote host.");
 	}
 	if (env.TMUX || env.STY) throw new Error("tmux/screen is unsupported. Run Pi directly or in Herdr.");
@@ -31,7 +41,29 @@ function parseHerdr(text: string): Record<string, any> {
 	return response.result;
 }
 
+function parseHc(text: string): Record<string, any> {
+	let response: Record<string, any>;
+	try {
+		response = JSON.parse(text);
+	} catch {
+		throw new Error("Invalid Herdr (hc) response.");
+	}
+	if (!response || typeof response !== "object") throw new Error("Invalid Herdr (hc) response.");
+	if (response.error) {
+		const message = typeof response.error.message === "string" ? response.error.message : JSON.stringify(response.error);
+		throw new Error(`Herdr: ${response.error.hint ? `${message} (${response.error.hint})` : message}`);
+	}
+	return response;
+}
+
 export async function prepareLauncher(host: Host, run: Run, env: NodeJS.ProcessEnv): Promise<Launcher> {
+	if (host === "hc") {
+		// No HC_BIN_PATH is injected; the caller's PATH resolves the installed hc binary.
+		const binary = env.HC_BIN_PATH || "hc";
+		// Read-only preflight: fail before writing a snapshot when the socket API is down.
+		parseHc(await run(binary, ["ls", "--json"]));
+		return { host, binary };
+	}
 	if (host === "herdr") {
 		if (env.HERDR_ENV !== "1" || !env.HERDR_PANE_ID) throw new Error("Missing Herdr caller pane.");
 		const binary = env.HERDR_BIN_PATH || "herdr";
@@ -97,8 +129,12 @@ export function resumeArgs(snapshot: ForkSnapshot): string[] {
 	return ["--session", snapshot.path, "--session-dir", dirname(snapshot.path)];
 }
 
+export function resumeScript(cwd: string, snapshot: ForkSnapshot, invocation: string[], env: NodeJS.ProcessEnv): string {
+	return `cd ${shellQuote(cwd)} && exec ${["/usr/bin/env", ...launchEnvironment(env), ...invocation, ...resumeArgs(snapshot)].map(shellQuote).join(" ")}`;
+}
+
 export function resumeCommand(cwd: string, snapshot: ForkSnapshot, invocation: string[], env: NodeJS.ProcessEnv): string {
-	const script = `cd ${shellQuote(cwd)} && exec ${["/usr/bin/env", ...launchEnvironment(env), ...invocation, ...resumeArgs(snapshot)].map(shellQuote).join(" ")}`;
+	const script = resumeScript(cwd, snapshot, invocation, env);
 	// The outer command works both as a terminal's executable command and as text
 	// entered into an interactive shell. No session/path is interpolated into AppleScript.
 	return `/bin/sh -c ${shellQuote(script)}`;
@@ -132,6 +168,11 @@ end run`,
 end run`,
 };
 
+/** hc terminal names are lowercase ASCII: reuse the fork ID, which is already unique. */
+export function forkTerminalName(snapshot: ForkSnapshot): string {
+	return `fork-${snapshot.id.slice(-12)}`;
+}
+
 export async function launchFork(
 	launcher: Launcher,
 	snapshot: ForkSnapshot,
@@ -141,6 +182,29 @@ export async function launchFork(
 	invocation: string[],
 	focus = true,
 ): Promise<string> {
+	if (launcher.host === "hc") {
+		const { binary } = launcher;
+		// hc resolves the calling terminal from the process ancestry, so a moved or
+		// renamed pane still parents the fork without a possibly stale HC_TERMINAL_ID.
+		// --no-notify keeps hc from typing a note into this Pi's own prompt, and
+		// --outlive-parent/--keep keep an independent fork alive when the source exits.
+		const args = [
+			"run", "--json", "--bg", "--no-notify", "--keep", "--outlive-parent",
+			"--name", forkTerminalName(snapshot), "--cwd", cwd,
+			"--", "/bin/sh", "-c", resumeScript(cwd, snapshot, invocation, env),
+		];
+		let created: Record<string, any>;
+		try {
+			created = parseHc(await run(binary, args, 30_000));
+		} catch (error) {
+			// A timeout does not prove the terminal was not created. Never retry, kill,
+			// or delete the snapshot: that could interrupt a live fork.
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`Check Herdr terminal ${forkTerminalName(snapshot)} before retrying. ${message}`);
+		}
+		if (typeof created.address !== "string" || !created.address) throw new Error("Missing Herdr terminal address. Check the new tab.");
+		return `Herdr terminal ${created.address}`;
+	}
 	if (launcher.host !== "herdr") {
 		const command = resumeCommand(cwd, snapshot, invocation, env);
 		await run("/usr/bin/osascript", ["-e", appleScripts[launcher.host], "--", cwd, command], 60_000);
@@ -163,7 +227,7 @@ export async function launchFork(
 	if (typeof tabId !== "string" || typeof paneId !== "string") throw new Error("Missing Herdr tab/pane ID. Check the new tab.");
 	try {
 		await run(binary, [
-			"agent", "start", `fork-${snapshot.id.slice(-12)}`, "--kind", "pi", "--pane", paneId,
+			"agent", "start", forkTerminalName(snapshot), "--kind", "pi", "--pane", paneId,
 			"--timeout", "30000", "--", ...resumeArgs(snapshot),
 		], 40_000);
 	} catch (error) {

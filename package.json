@@ -1,7 +1,7 @@
 {
   "name": "pi-forkme",
-  "version": "0.2.2",
-  "description": "Fork the active Pi session into a new Herdr tab or macOS terminal window with /forkme.",
+  "version": "0.3.0",
+  "description": "Fork the active Pi session into a new Herdr app terminal, Herdr tab, or macOS terminal window with /forkme.",
   "type": "module",
   "license": "MIT",
   "author": {
@@ -15,6 +15,7 @@
     "session",
     "fork",
     "herdr",
+    "hc",
     "ghostty",
     "iterm2"
   ],
@@ -45,13 +46,14 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-coding-agent": "^1.5.2",
     "@types/node": "24.13.4",
     "typescript": "7.0.2"
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "test:herdr": "node tests/herdr-smoke.mjs",
+    "test:hc": "node tests/hc-smoke.mjs",
     "check": "tsc --noEmit",
     "verify": "npm run check && npm test",
     "prepublishOnly": "npm run verify && node scripts/check-release.mjs"
